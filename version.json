@@ -1,4 +1,5 @@
 {
   "version": 2,
-  "update_url": "https://yourdomain.com/app.apk"
+  "update_url": "https://yourdomain.com/app.apk",
+  "message": "ဗားရှင်းအသစ်ထွက်ပါပြီ။ Bug များပြင်ထားပါတယ်။"
 }
