@@ -290,9 +290,23 @@ def telegram_polling():
                         "fb_off": {"fb_download_enabled": False}
                     }
 
-                    if data in changes:
+                                        if data in changes:
                         update_settings(changes[data])
-                        send_telegram("✅ ပြောင်းလဲမှု အောင်မြင်ပါသည်။\n\n" + status_text(), chat_id)
+
+                        messages = {
+                            "lock": "🔒 App ကို ပိတ်လိုက်ပါပြီ။",
+                            "unlock": "🔓 App ကို ပြန်ဖွင့်လိုက်ပါပြီ။",
+                            "maintenance_on": "🛠 Maintenance Mode ကို ဖွင့်လိုက်ပါပြီ။",
+                            "maintenance_off": "✅ Maintenance Mode ကို ပိတ်လိုက်ပါပြီ။",
+                            "fb_on": "📥 FB Download ကို ဖွင့်လိုက်ပါပြီ။",
+                            "fb_off": "⛔ FB Download ကို ပိတ်လိုက်ပါပြီ။"
+                        }
+
+                        send_telegram(
+                            messages[data] + "\n\n" + status_text(),
+                            chat_id
+                        )
+
                     elif data == "status":
                         send_telegram(status_text(), chat_id)
 
