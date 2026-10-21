@@ -448,15 +448,13 @@ def process_callback(callback):
     }
 
     messages = {
-        "lock": "🔒 App Lock ကို ဖွင့်လိုက်ပါပြီ။",
-        "unlock": "🔓 App Lock ကို ပိတ်ပြီး "
-                  "အသုံးပြုခွင့် ပြန်ဖွင့်လိုက်ပါပြီ။",
-        "maintenance_on": "🛠 Maintenance Mode ကို "
-                          "ဖွင့်လိုက်ပါပြီ။",
-        "maintenance_off": "✅ Maintenance Mode ကို "
-                           "ပိတ်လိုက်ပါပြီ။",
+        "lock": "🔒 App ကို ပိတ်လိုက်ပါပြီ။",
+        "unlock": "🔓 App ကို ဖွင့်လိုက်ပါပြီ။",
+        "maintenance_on": "🛠 Maintenance Mode ကို ဖွင့်လိုက်ပါပြီ။",
+        "maintenance_off": "✅ Maintenance Mode ကို ပိတ်လိုက်ပါပြီ။",
         "fb_on": "📥 FB Download ကို ဖွင့်လိုက်ပါပြီ။",
         "fb_off": "⛔ FB Download ကို ပိတ်လိုက်ပါပြီ။"
+    }
     }
 
     if data in changes:
