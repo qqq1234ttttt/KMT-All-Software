@@ -455,7 +455,6 @@ def process_callback(callback):
         "fb_on": "📥 FB Download ကို ဖွင့်လိုက်ပါပြီ။",
         "fb_off": "⛔ FB Download ကို ပိတ်လိုက်ပါပြီ။"
     }
-    }
 
     if data in changes:
         update_settings(changes[data])
