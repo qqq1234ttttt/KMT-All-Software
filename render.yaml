@@ -1,15 +1,17 @@
 services:
-  - type: web
-    name: kmt-all-software-control
-    runtime: python
-    plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
-    healthCheckPath: /health
-    envVars:
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_ADMIN_CHAT_ID
-        sync: false
-      - key: ADMIN_API_KEY
-        generateValue: true
+- type: web
+  name: kmt-all-software-control
+  runtime: python
+  plan: free
+  buildCommand: pip install -r requirements.txt
+  startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+  healthCheckPath: /health
+  envVars:
+  - key: PYTHON_VERSION
+    value: 3.13.5
+  - key: TELEGRAM_BOT_TOKEN
+    sync: false
+  - key: TELEGRAM_ADMIN_CHAT_ID
+    sync: false
+  - key: ADMIN_API_KEY
+    generateValue: true
