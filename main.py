@@ -289,8 +289,7 @@ def telegram_polling():
                         "fb_on": {"fb_download_enabled": True},
                         "fb_off": {"fb_download_enabled": False}
                     }
-
-                                        if data in changes:
+                                          if data in changes:
                         update_settings(changes[data])
 
                         messages = {
