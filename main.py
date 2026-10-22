@@ -257,16 +257,22 @@ def status_text():
     return (
         "📊 KMT All Software အခြေအနေ\n\n"
         f"🔒 App Lock: {app_lock_status}\n"
-        f"🛠 Maintenance: {maintenance_status}\n\n"
-        f"🔄 နောက်ဆုံး Version: {settings['latest_version']}\n"
-        f"📱 အနည်းဆုံး Version: {settings['minimum_version']}\n"
-        f"🔗 APK Link: {settings['apk_url'] or 'မသတ်မှတ်ရသေးပါ'}\n\n"
-        f"📝 Update စာသား:\n"
-        f"{settings['update_message']}\n\n"
-        f"📢 ကြေညာချက်:\n"
-        f"{settings['announcement'] or 'မရှိသေးပါ'}"
+        f"🛠 Maintenance: {maintenance_status}"
     )
 
+
+def update_status_text():
+    settings = load_settings()
+
+    return (
+        "🔄 KMT Update Settings\n\n"
+        f"📦 Latest Version: {settings['latest_version']}\n"
+        f"📱 Minimum Version: {settings['minimum_version']}\n\n"
+        f"🔗 APK Download Link:\n"
+        f"{settings['apk_url'] or 'မသတ်မှတ်ရသေးပါ'}\n\n"
+        f"📝 Update စာသား:\n"
+        f"{settings.get('update_message', 'မသတ်မှတ်ရသေးပါ')}"
+    )
 
 # -------------------------
 # API ROUTES
@@ -431,6 +437,7 @@ def process_message(message):
     if not is_admin(chat_id):
         return
 
+    # MAIN MENU
     if text in ("/start", "/menu"):
         send_telegram(
             "မင်္ဂလာပါ။ KMT All Software Control မှ ကြိုဆိုပါတယ်။\n\n"
@@ -444,12 +451,124 @@ def process_message(message):
             telegram_keyboard()
         )
 
+    # LOCK STATUS ONLY
     elif text == "/status":
         send_telegram(status_text(), chat_id)
 
-    # Set announcement text.
+    # UPDATE STATUS ONLY
+    elif text in ("/updatestatus", "/updatestatus@"):
+        send_telegram(update_status_text(), chat_id)
+
+    # UPDATE MESSAGE ONLY
+    elif text == "/updatemsg" or text.startswith("/updatemsg "):
+        update_message = text[len("/updatemsg"):].strip()
+
+        if not update_message:
+            send_telegram(
+                "📝 Update စာသားပြောင်းရန်:\n\n"
+                "/updatemsg ကိုကြိုက်တဲ့စာသားရေးပါ\n\n"
+                "ဥပမာ:\n"
+                "/updatemsg App ဗားရှင်းအသစ်ထွက်ပါပြီ။ Update လုပ်ပေးပါ။",
+                chat_id
+            )
+            return
+
+        update_settings({
+            "update_message": update_message
+        })
+
+        send_telegram(
+            "✅ Update စာသား ပြောင်းပြီးပါပြီ။\n\n"
+            + update_status_text(),
+            chat_id
+        )
+
+    # APK LINK ONLY
+    elif text == "/apk" or text.startswith("/apk "):
+        apk_url = text[len("/apk"):].strip()
+
+        if not apk_url:
+            send_telegram(
+                "🔗 APK Link ထည့်ရန်:\n\n"
+                "/apk https://example.com/app.apk",
+                chat_id
+            )
+            return
+
+        from urllib.parse import urlparse
+
+        parsed = urlparse(apk_url)
+
+        if parsed.scheme != "https" or not parsed.netloc:
+            send_telegram(
+                "❌ မှန်ကန်တဲ့ HTTPS Download Link ထည့်ပါ။",
+                chat_id
+            )
+            return
+
+        update_settings({
+            "apk_url": apk_url
+        })
+
+        send_telegram(
+            "✅ APK Download Link ပြောင်းပြီးပါပြီ။\n\n"
+            + update_status_text(),
+            chat_id
+        )
+
+    # VERSION ONLY
+    elif text == "/version" or text.startswith("/version "):
+        parts = text.split()
+
+        if len(parts) != 3:
+            send_telegram(
+                "အသုံးပြုပုံ:\n\n"
+                "/version 1.2.0 1.2.0\n\n"
+                "ပထမ Version = Latest Version\n"
+                "ဒုတိယ Version = Minimum Version",
+                chat_id
+            )
+            return
+
+        latest_version = parts[1]
+        minimum_version = parts[2]
+
+        import re
+
+        version_pattern = r"\d+(?:\.\d+)*"
+
+        if not re.fullmatch(version_pattern, latest_version):
+            send_telegram("❌ Latest Version ပုံစံ မမှန်ပါ။", chat_id)
+            return
+
+        if not re.fullmatch(version_pattern, minimum_version):
+            send_telegram("❌ Minimum Version ပုံစံ မမှန်ပါ။", chat_id)
+            return
+
+        def parse_version(value):
+            return tuple(int(part) for part in value.split("."))
+
+        if parse_version(minimum_version) > parse_version(latest_version):
+            send_telegram(
+                "❌ Minimum Version သည် Latest Version ထက် မကြီးရပါ။",
+                chat_id
+            )
+            return
+
+        update_settings({
+            "latest_version": latest_version,
+            "minimum_version": minimum_version
+        })
+
+        send_telegram(
+            "✅ Version ပြောင်းပြီးပါပြီ။\n\n"
+            + update_status_text(),
+            chat_id
+        )
+
+    # ANNOUNCEMENT ONLY
     elif text.startswith("/notice ") or text.startswith("/announce "):
-        command, _, notice = text.partition(" ")
+        _, _, notice = text.partition(" ")
         notice = notice.strip()
 
         if not notice:
@@ -459,13 +578,28 @@ def process_message(message):
             )
             return
 
-        update_settings({"announcement": notice})
+        update_settings({
+            "announcement": notice
+        })
 
         send_telegram(
             "✅ ကြေညာချက် သိမ်းဆည်းပြီးပါပြီ။",
             chat_id
         )
 
+    # HELP
+    elif text == "/help":
+        send_telegram(
+            "📘 KMT Bot Commands\n\n"
+            "/start - Menu\n"
+            "/status - App Lock အခြေအနေ\n"
+            "/updatestatus - Update ဆက်တင်များ\n"
+            "/updatemsg စာသား - Update စာသားပြောင်းရန်\n"
+            "/apk HTTPS_LINK - APK Link ပြောင်းရန်\n"
+            "/version LATEST MINIMUM - Version ပြောင်းရန်\n"
+            "/notice စာသား - ကြေညာချက်ပြောင်းရန်",
+            chat_id
+        )
     # Full update configuration:
     # /update <latest> <minimum> <apk_url> <message>
     elif text == "/update" or text.startswith("/update "):
