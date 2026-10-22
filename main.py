@@ -17,7 +17,7 @@ DATA_FILE = "data.json"
 DATA_LOCK = threading.Lock()
 
 DEFAULT_SETTINGS = {
-    "app_locked": False,
+    "app_locked": True,
     "maintenance_mode": False,
     "maintenance_message": "လက်ရှိတွင် App ကို ပြုပြင်ထိန်းသိမ်းနေပါသည်။",
     "fb_download_enabled": True,
