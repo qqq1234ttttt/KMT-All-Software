@@ -2,10 +2,13 @@ import os
 import json
 import threading
 import time
-import requests
+import re
+from urllib.parse import urlparse
 
+import requests
 from fastapi import FastAPI, Header, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
+
 
 app = FastAPI(title="KMT All Software Control")
 
@@ -14,20 +17,67 @@ ADMIN_CHAT_ID = os.getenv("TELEGRAM_ADMIN_CHAT_ID", "")
 ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "")
 
 DATA_FILE = "data.json"
-DATA_LOCK = threading.Lock()
+DATA_LOCK = threading.RLock()
 
 DEFAULT_SETTINGS = {
     "app_locked": True,
     "maintenance_mode": False,
     "maintenance_message": "လက်ရှိတွင် App ကို ပြုပြင်ထိန်းသိမ်းနေပါသည်။",
-    "fb_download_enabled": True,
+
     "latest_version": "1.1.0",
     "minimum_version": "1.1.0",
+
     "apk_url": "",
+    "update_message": "App ဗားရှင်းအသစ် ထွက်ရှိလာပါပြီ။ ဆက်လက်အသုံးပြုရန် Update လုပ်ပေးပါ။",
+
     "announcement": "",
     "updated_at": ""
 }
 
+
+# -------------------------
+# VERSION VALIDATION
+# -------------------------
+
+def valid_version(version):
+    if not isinstance(version, str):
+        return False
+
+    return bool(
+        re.fullmatch(r"\d+(?:\.\d+)*", version.strip())
+    )
+
+
+def version_tuple(version):
+    return tuple(
+        int(part)
+        for part in version.strip().split(".")
+    )
+
+
+def is_valid_apk_url(url):
+    if not isinstance(url, str):
+        return False
+
+    try:
+        parsed = urlparse(url.strip())
+
+        return (
+            parsed.scheme == "https"
+            and bool(parsed.netloc)
+            and not any(
+                char.isspace()
+                for char in url.strip()
+            )
+        )
+
+    except Exception:
+        return False
+
+
+# -------------------------
+# SETTINGS
+# -------------------------
 
 def load_settings():
     with DATA_LOCK:
@@ -36,9 +86,15 @@ def load_settings():
                 saved = json.load(file)
 
             if not isinstance(saved, dict):
-                return DEFAULT_SETTINGS.copy()
+                saved = {}
 
-            return {**DEFAULT_SETTINGS, **saved}
+            settings = DEFAULT_SETTINGS.copy()
+            settings.update(saved)
+
+            # Remove the old FB Download setting.
+            settings.pop("fb_download_enabled", None)
+
+            return settings
 
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             return DEFAULT_SETTINGS.copy()
@@ -60,17 +116,26 @@ def save_settings(settings):
 
 
 def update_settings(changes):
-    settings = load_settings()
-    settings.update(changes)
+    with DATA_LOCK:
+        settings = load_settings()
+        settings.update(changes)
 
-    settings["updated_at"] = time.strftime(
-        "%Y-%m-%d %H:%M:%S",
-        time.gmtime()
-    )
+        # Never retain the old FB Download setting.
+        settings.pop("fb_download_enabled", None)
 
-    save_settings(settings)
-    return settings
+        settings["updated_at"] = time.strftime(
+            "%Y-%m-%d %H:%M:%S",
+            time.gmtime()
+        )
 
+        save_settings(settings)
+
+        return settings
+
+
+# -------------------------
+# TELEGRAM
+# -------------------------
 
 def send_telegram(text, chat_id=None, reply_markup=None):
     if not BOT_TOKEN:
@@ -83,7 +148,7 @@ def send_telegram(text, chat_id=None, reply_markup=None):
 
     payload = {
         "chat_id": target,
-        "text": text
+        "text": str(text)
     }
 
     if reply_markup is not None:
@@ -162,17 +227,17 @@ def telegram_keyboard():
             ],
             [
                 {
-                    "text": "📥 FB Download ဖွင့်",
-                    "callback_data": "fb_on"
-                },
-                {
-                    "text": "⛔ FB Download ပိတ်",
-                    "callback_data": "fb_off"
+                    "text": "🔄 Update အချက်အလက်",
+                    "callback_data": "update_status"
                 }
             ]
         ]
     }
 
+
+# -------------------------
+# STATUS
+# -------------------------
 
 def status_text():
     settings = load_settings()
@@ -189,23 +254,23 @@ def status_text():
         else "ပိတ်ထားသည်"
     )
 
-    fb_status = (
-        "ဖွင့်ထားသည်"
-        if settings["fb_download_enabled"]
-        else "ပိတ်ထားသည်"
-    )
-
     return (
         "📊 KMT All Software အခြေအနေ\n\n"
         f"🔒 App Lock: {app_lock_status}\n"
-        f"🛠 Maintenance: {maintenance_status}\n"
-        f"📥 FB Download: {fb_status}\n"
+        f"🛠 Maintenance: {maintenance_status}\n\n"
         f"🔄 နောက်ဆုံး Version: {settings['latest_version']}\n"
         f"📱 အနည်းဆုံး Version: {settings['minimum_version']}\n"
-        f"📢 ကြေညာချက်: "
+        f"🔗 APK Link: {settings['apk_url'] or 'မသတ်မှတ်ရသေးပါ'}\n\n"
+        f"📝 Update စာသား:\n"
+        f"{settings['update_message']}\n\n"
+        f"📢 ကြေညာချက်:\n"
         f"{settings['announcement'] or 'မရှိသေးပါ'}"
     )
 
+
+# -------------------------
+# API ROUTES
+# -------------------------
 
 @app.get("/")
 def home():
@@ -228,50 +293,67 @@ def health():
 def public_config(version: str = "1.1.0"):
     settings = load_settings()
 
-    try:
-        current = tuple(
-            int(part) for part in version.split(".")
+    if not valid_version(version):
+        raise HTTPException(
+            status_code=400,
+            detail="Version ပုံစံ မမှန်ပါ။"
         )
 
-        minimum = tuple(
-            int(part)
-            for part in settings["minimum_version"].split(".")
+    if not valid_version(settings["latest_version"]):
+        raise HTTPException(
+            status_code=500,
+            detail="Server latest_version မမှန်ပါ။"
         )
 
-        latest = tuple(
-            int(part)
-            for part in settings["latest_version"].split(".")
+    if not valid_version(settings["minimum_version"]):
+        raise HTTPException(
+            status_code=500,
+            detail="Server minimum_version မမှန်ပါ။"
         )
 
-    except (ValueError, AttributeError):
-        current = (0,)
-        minimum = (1,)
-        latest = (1,)
+    current = version_tuple(version)
+    minimum = version_tuple(settings["minimum_version"])
+    latest = version_tuple(settings["latest_version"])
 
     return {
         "app_locked": settings["app_locked"],
+
         "maintenance_mode": settings["maintenance_mode"],
         "maintenance_message": settings["maintenance_message"],
-        "fb_download_enabled": settings["fb_download_enabled"],
+
         "current_version": version,
         "latest_version": settings["latest_version"],
         "minimum_version": settings["minimum_version"],
+
         "update_available": current < latest,
         "force_update": current < minimum,
+
         "apk_url": settings["apk_url"],
+        "update_message": settings["update_message"],
+
         "announcement": settings["announcement"],
         "updated_at": settings["updated_at"]
     }
 
 
+# -------------------------
+# ADMIN SETTINGS API
+# -------------------------
+
 class SettingsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     app_locked: bool | None = None
+
     maintenance_mode: bool | None = None
     maintenance_message: str | None = None
-    fb_download_enabled: bool | None = None
+
     latest_version: str | None = None
     minimum_version: str | None = None
+
     apk_url: str | None = None
+    update_message: str | None = None
+
     announcement: str | None = None
 
 
@@ -298,8 +380,49 @@ def admin_settings(
 
     changes = body.model_dump(exclude_none=True)
 
+    current = load_settings()
+
+    new_latest = changes.get(
+        "latest_version",
+        current["latest_version"]
+    )
+
+    new_minimum = changes.get(
+        "minimum_version",
+        current["minimum_version"]
+    )
+
+    if not valid_version(new_latest):
+        raise HTTPException(
+            status_code=400,
+            detail="latest_version မမှန်ပါ။"
+        )
+
+    if not valid_version(new_minimum):
+        raise HTTPException(
+            status_code=400,
+            detail="minimum_version မမှန်ပါ။"
+        )
+
+    if version_tuple(new_minimum) > version_tuple(new_latest):
+        raise HTTPException(
+            status_code=400,
+            detail="minimum_version သည် latest_version ထက် မကြီးရပါ။"
+        )
+
+    if "apk_url" in changes:
+        if changes["apk_url"] and not is_valid_apk_url(changes["apk_url"]):
+            raise HTTPException(
+                status_code=400,
+                detail="APK Link သည် HTTPS URL ဖြစ်ရပါမည်။"
+            )
+
     return update_settings(changes)
 
+
+# -------------------------
+# TELEGRAM COMMANDS
+# -------------------------
 
 def process_message(message):
     chat_id = message.get("chat", {}).get("id")
@@ -310,8 +433,7 @@ def process_message(message):
 
     if text in ("/start", "/menu"):
         send_telegram(
-            "မင်္ဂလာပါ။ KMT All Software Control မှ "
-            "ကြိုဆိုပါတယ်။\n\n"
+            "မင်္ဂလာပါ။ KMT All Software Control မှ ကြိုဆိုပါတယ်။\n\n"
             + status_text(),
             chat_id
         )
@@ -325,12 +447,14 @@ def process_message(message):
     elif text == "/status":
         send_telegram(status_text(), chat_id)
 
-    elif text.startswith("/notice "):
-        notice = text[len("/notice "):].strip()
+    # Set announcement text.
+    elif text.startswith("/notice ") or text.startswith("/announce "):
+        command, _, notice = text.partition(" ")
+        notice = notice.strip()
 
         if not notice:
             send_telegram(
-                "အသုံးပြုပုံ: /notice ကြေညာချက်စာသား",
+                "အသုံးပြုပုံ:\n/notice ကြေညာချက်စာသား",
                 chat_id
             )
             return
@@ -342,34 +466,116 @@ def process_message(message):
             chat_id
         )
 
-    elif text.startswith("/announce "):
-        notice = text[len("/announce "):].strip()
+    # Full update configuration:
+    # /update <latest> <minimum> <apk_url> <message>
+    elif text == "/update" or text.startswith("/update "):
+        parts = text.split(maxsplit=3)
 
-        if not notice:
+        if len(parts) < 4:
             send_telegram(
-                "အသုံးပြုပုံ: /announce ကြေညာချက်စာသား",
+                "အသုံးပြုပုံ:\n"
+                "/update 1.2.0 1.2.0 https://example.com/app.apk App ဗားရှင်းအသစ် ထွက်ပါပြီ။ Update လုပ်ပေးပါ။\n\n"
+                "1. ပထမ Version = Latest Version\n"
+                "2. ဒုတိယ Version = Minimum Version\n"
+                "3. တတိယ = HTTPS APK Link\n"
+                "4. ကျန်စာသားအားလုံး = Update Message\n\n"
+                "မဖြစ်မနေ Update လုပ်စေလိုပါက Minimum Version ကို Latest Version နဲ့ တူအောင်ထားပါ။",
                 chat_id
             )
             return
 
-        update_settings({"announcement": notice})
+        values = parts[1].split(maxsplit=2)
+
+        # split(maxsplit=3) keeps the whole message in parts[3].
+        latest_version = parts[1]
+        minimum_version = parts[2]
+        apk_url = parts[3].split(maxsplit=1)[0] if len(parts) >= 4 else ""
+        update_message = (
+            parts[3].split(maxsplit=1)[1].strip()
+            if len(parts) >= 4 and len(parts[3].split(maxsplit=1)) > 1
+            else ""
+        )
+
+        if not valid_version(latest_version):
+            send_telegram("❌ Latest Version ပုံစံ မမှန်ပါ။ ဥပမာ 1.2.0", chat_id)
+            return
+
+        if not valid_version(minimum_version):
+            send_telegram("❌ Minimum Version ပုံစံ မမှန်ပါ။ ဥပမာ 1.2.0", chat_id)
+            return
+
+        if version_tuple(minimum_version) > version_tuple(latest_version):
+            send_telegram("❌ Minimum Version သည် Latest Version ထက် မကြီးရပါ။", chat_id)
+            return
+
+        if not is_valid_apk_url(apk_url):
+            send_telegram("❌ APK Link မှန်ကန်သော HTTPS Link ဖြစ်ရပါမည်။", chat_id)
+            return
+
+        if not update_message:
+            send_telegram("❌ Update စာသား ထည့်ပေးပါ။", chat_id)
+            return
+
+        update_settings({
+            "latest_version": latest_version,
+            "minimum_version": minimum_version,
+            "apk_url": apk_url,
+            "update_message": update_message
+        })
 
         send_telegram(
-            "📢 ကြေညာချက်ကို API ထဲတွင် "
-            "သိမ်းဆည်းပြီးပါပြီ။",
+            "✅ Update ဆက်တင်အားလုံး သိမ်းဆည်းပြီးပါပြီ။\n\n"
+            + status_text(),
             chat_id
         )
 
-    elif text.startswith("/version"):
-        parts = text.split(maxsplit=3)
+    # Change only the update message.
+    elif text == "/updatemsg" or text.startswith("/updatemsg "):
+        message_text = text[len("/updatemsg"):].strip()
 
-        if len(parts) < 3:
+        if not message_text:
+            send_telegram(
+                "အသုံးပြုပုံ:\n/updatemsg ကိုကြိုက်တဲ့ Update စာသား",
+                chat_id
+            )
+            return
+
+        update_settings({"update_message": message_text})
+
+        send_telegram(
+            "✅ Update စာသား ပြောင်းပြီးပါပြီ။\n\n"
+            + status_text(),
+            chat_id
+        )
+
+    # Change only APK URL.
+    elif text.startswith("/apk "):
+        url = text[len("/apk "):].strip()
+
+        if not is_valid_apk_url(url):
+            send_telegram(
+                "❌ HTTPS APK Link ထည့်ပါ။\n"
+                "ဥပမာ: /apk https://example.com/app.apk",
+                chat_id
+            )
+            return
+
+        update_settings({"apk_url": url})
+
+        send_telegram(
+            "✅ APK Link ပြောင်းပြီးပါပြီ။\n\n" + status_text(),
+            chat_id
+        )
+
+    # Change versions without changing message.
+    elif text.startswith("/version"):
+        parts = text.split()
+
+        if len(parts) not in (3, 4):
             send_telegram(
                 "အသုံးပြုပုံ:\n"
-                "/version 1.2.0 1.1.0 https://example.com/app.apk\n\n"
-                "ပထမ Version = နောက်ဆုံး Version\n"
-                "ဒုတိယ Version = အနည်းဆုံး Version\n"
-                "APK URL = မဖြစ်မနေ မလိုပါ။",
+                "/version 1.2.0 1.2.0\n"
+                "/version 1.2.0 1.2.0 https://example.com/app.apk",
                 chat_id
             )
             return
@@ -377,12 +583,24 @@ def process_message(message):
         latest_version = parts[1]
         minimum_version = parts[2]
 
+        if not valid_version(latest_version) or not valid_version(minimum_version):
+            send_telegram("❌ Version ပုံစံ မမှန်ပါ။", chat_id)
+            return
+
+        if version_tuple(minimum_version) > version_tuple(latest_version):
+            send_telegram("❌ Minimum Version သည် Latest Version ထက် မကြီးရပါ။", chat_id)
+            return
+
         changes = {
             "latest_version": latest_version,
             "minimum_version": minimum_version
         }
 
         if len(parts) == 4:
+            if not is_valid_apk_url(parts[3]):
+                send_telegram("❌ HTTPS APK Link ထည့်ပါ။", chat_id)
+                return
+
             changes["apk_url"] = parts[3]
 
         update_settings(changes)
@@ -393,23 +611,23 @@ def process_message(message):
             chat_id
         )
 
-    elif text.startswith("/apk "):
-        url = text[len("/apk "):].strip()
-
-        if not url:
-            send_telegram(
-                "အသုံးပြုပုံ: /apk https://example.com/app.apk",
-                chat_id
-            )
-            return
-
-        update_settings({"apk_url": url})
-
+    elif text == "/help":
         send_telegram(
-            "✅ APK လင့်ခ် သိမ်းဆည်းပြီးပါပြီ။",
+            "📘 KMT Update Commands\n\n"
+            "/start - Menu ဖွင့်ရန်\n"
+            "/status - လက်ရှိအခြေအနေ\n"
+            "/update - Version၊ APK Link၊ စာသားအားလုံးပြောင်းရန်\n"
+            "/updatemsg စာသား - Update စာသားပြောင်းရန်\n"
+            "/apk HTTPS_LINK - APK Link ပြောင်းရန်\n"
+            "/version LATEST MINIMUM - Version ပြောင်းရန်\n"
+            "/notice စာသား - ကြေညာချက်ပြောင်းရန်",
             chat_id
         )
 
+
+# -------------------------
+# TELEGRAM BUTTON CALLBACKS
+# -------------------------
 
 def process_callback(callback):
     chat_id = callback.get("message", {}).get(
@@ -420,40 +638,21 @@ def process_callback(callback):
     callback_id = callback.get("id", "")
 
     if not is_admin(chat_id):
-        answer_callback(
-            callback_id,
-            "ခွင့်ပြုချက်မရှိပါ။"
-        )
+        answer_callback(callback_id, "ခွင့်ပြုချက်မရှိပါ။")
         return
 
     changes = {
-        "lock": {
-            "app_locked": True
-        },
-        "unlock": {
-            "app_locked": False
-        },
-        "maintenance_on": {
-            "maintenance_mode": True
-        },
-        "maintenance_off": {
-            "maintenance_mode": False
-        },
-        "fb_on": {
-            "fb_download_enabled": True
-        },
-        "fb_off": {
-            "fb_download_enabled": False
-        }
+        "lock": {"app_locked": True},
+        "unlock": {"app_locked": False},
+        "maintenance_on": {"maintenance_mode": True},
+        "maintenance_off": {"maintenance_mode": False}
     }
 
     messages = {
         "lock": "🔒 App ကို ပိတ်လိုက်ပါပြီ။",
         "unlock": "🔓 App ကို ဖွင့်လိုက်ပါပြီ။",
         "maintenance_on": "🛠 Maintenance Mode ကို ဖွင့်လိုက်ပါပြီ။",
-        "maintenance_off": "✅ Maintenance Mode ကို ပိတ်လိုက်ပါပြီ။",
-        "fb_on": "📥 FB Download ကို ဖွင့်လိုက်ပါပြီ။",
-        "fb_off": "⛔ FB Download ကို ပိတ်လိုက်ပါပြီ။"
+        "maintenance_off": "✅ Maintenance Mode ကို ပိတ်လိုက်ပါပြီ။"
     }
 
     if data in changes:
@@ -464,25 +663,20 @@ def process_callback(callback):
             chat_id
         )
 
-        answer_callback(
-            callback_id,
-            "✅ ဆက်တင် ပြောင်းပြီးပါပြီ။"
-        )
+        answer_callback(callback_id, "✅ ဆက်တင် ပြောင်းပြီးပါပြီ။")
 
-    elif data == "status":
+    elif data in ("status", "update_status"):
         send_telegram(status_text(), chat_id)
 
-        answer_callback(
-            callback_id,
-            "📊 လက်ရှိအခြေအနေ ပြသပြီးပါပြီ။"
-        )
+        answer_callback(callback_id, "📊 အချက်အလက် ပြသပြီးပါပြီ။")
 
     else:
-        answer_callback(
-            callback_id,
-            "မသိရှိသော ခလုတ်ဖြစ်ပါသည်။"
-        )
+        answer_callback(callback_id, "မသိရှိသော ခလုတ်ဖြစ်ပါသည်။")
 
+
+# -------------------------
+# TELEGRAM LONG POLLING
+# -------------------------
 
 def telegram_polling():
     if not BOT_TOKEN:
@@ -493,12 +687,14 @@ def telegram_polling():
 
     while True:
         try:
+            params = {"timeout": 25}
+
+            if offset is not None:
+                params["offset"] = offset
+
             response = requests.get(
                 f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates",
-                params={
-                    "timeout": 25,
-                    "offset": offset
-                },
+                params=params,
                 timeout=35
             )
 
