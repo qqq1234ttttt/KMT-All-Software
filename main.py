@@ -35,7 +35,7 @@ PENDING_UPDATE = {}
 # ==========================================
 
 DEFAULT_SETTINGS = {
-    "app_locked": True,
+    "app_locked": False,
 
     "maintenance_mode": False,
 
